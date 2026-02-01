@@ -1,22 +1,19 @@
 {
-    "Group": "Example",
-    "Name": "ExamplePlugin",
-    "Version": "0.0.2",
-    "Description": "An example plugin for HyTale!",
+    "Name": "ChatQuiz",
+    "Group": "com.hytale.server.plugin",
+    "Version": "1.0.0",
+    "Main": "com.hytale.server.plugin.chatquiz.ChatQuizPlugin",
+    "Description": "Sistema de quiz autom\u00e1tico baseado em chat para Hytale",
     "Authors": [
         {
-            "Name": "It's you!"
+            "Name": "ChatQuiz Team"
         }
     ],
-    "Website": "example.org",
-    "ServerVersion": "*",
     "Dependencies": {
         
     },
     "OptionalDependencies": {
         
     },
-    "DisabledByDefault": false,
-    "Main": "org.example.plugin.ExamplePlugin",
-    "IncludesAssetPack": true
+    "IncludesAssetPack": false
 }

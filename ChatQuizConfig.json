@@ -1,0 +1,47 @@
+{
+  "IntervaloInicioQuizSegundos": 300,
+  "DuracaoQuizSegundos": 60,
+  "MensagemAntesQuizGlobal": [
+    "&6&lQUIZ",
+    "&fPergunta: &e{pergunta}",
+    "&7Digite sua resposta no chat"
+  ],
+  "MensagemGlobalAoAcertar": [
+    "&6&lQUIZ",
+    "&a{player} &facertou a pergunta!"
+  ],
+  "BannerIniciarQuiz": {
+    "Ativo": true,
+    "Titulo": "&6&lQUIZ",
+    "Subtitulo": "&fResponda a pergunta no chat!"
+  },
+  "BannerGanhadorQuiz": {
+    "Ativo": true,
+    "Titulo": "&6&lQUIZ",
+    "Subtitulo": "&a{player} &facertou!"
+  },
+  "ComandosGlobaisAoAcertar": [
+    "give {player} Ingredient_Bar_Iron --quantity=10"
+  ],
+  "Perguntas": [
+    {
+      "Pergunta": "Qual e a capital do Brasil?",
+      "Respostas": [
+        "brasilia",
+        "brasília"
+      ],
+      "ComandosAoAcertar": [
+        "give {player} Ingredient_Bar_Gold --quantity=1"
+      ]
+    },
+    {
+      "Pergunta": "Quanto e 1+1?",
+      "Respostas": [
+        "2"
+      ],
+      "ComandosAoAcertar": [
+        "give {player} Ingredient_Bar_Gold --quantity=1"
+      ]
+    }
+  ]
+}

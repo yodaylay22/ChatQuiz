@@ -11,6 +11,7 @@ description = findProperty("pluginDescription") as String? ?: "A Hytale plugin t
 repositories {
     mavenLocal()
     mavenCentral()
+    maven { url = uri("https://jitpack.io") }
 }
 
 dependencies {
@@ -20,10 +21,12 @@ dependencies {
     // Common dependencies (will be bundled in JAR)
     implementation("com.google.code.gson:gson:2.10.1")
     implementation("org.jetbrains:annotations:24.1.0")
+    implementation("com.github.Zoltus:TinyMessage:2.0.1")
     
     // Test dependencies
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.0")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+
 }
 
 // Configure server testing
