@@ -108,7 +108,12 @@ public class ChatQuizPlugin extends JavaPlugin {
         LOGGER.atInfo().log("Configuracao carregada com sucesso!");
         LOGGER.atInfo().log("Intervalo: " + configuracao.getIntervaloInicioQuizSegundos() + "s");
         LOGGER.atInfo().log("Duracao: " + configuracao.getDuracaoQuizSegundos() + "s");
-        LOGGER.atInfo().log("Perguntas: " + configuracao.getPerguntas().size());
+        int totalJogos = configuracao.getQuizEntries().size() 
+                       + configuracao.getTypeFrases().size() 
+                       + configuracao.getScramblePalavras().size();
+        LOGGER.atInfo().log("Jogos configurados: " + totalJogos + " (QUIZ: " + configuracao.getQuizEntries().size() 
+            + ", TYPE: " + configuracao.getTypeFrases().size() 
+            + ", SCRAMBLE: " + configuracao.getScramblePalavras().size() + ")");
     }
     
     /**

@@ -32,18 +32,24 @@ public class QuizManager {
     private final ScheduledExecutorService scheduler;
     
     private boolean quizAtivo = false;
-    private ChatQuizConfig.PerguntaConfig perguntaAtual = null;
-    private String palavraEmbaralhada = null; // Usado no modo SCRAMBLE
+    private QuizType tipoAtual = null;
+    
+    // Dados do quiz atual (depende do tipo)
+    private ChatQuizConfig.QuizEntry quizEntryAtual = null;  // Para tipo QUIZ
+    private String fraseAtual = null;  // Para tipo TYPE e SCRAMBLE
+    private String embaralhadaAtual = null;  // Apenas para SCRAMBLE
+    
     private ScheduledFuture<?> timeoutTask = null;
     private ScheduledFuture<?> proximoQuizTask = null;
     
     public static final String PERMISSION_ADMIN = "chatquiz.admin";
     
-    // Placeholders para mensagens dinâmicas
-    private static final String PLACEHOLDER_PERGUNTA = "{pergunta}";
+    // Placeholders
     private static final String PLACEHOLDER_PLAYER = "{player}";
-    private static final String PLACEHOLDER_SCRAMBLE = "{scramble}";
-    private static final String PLACEHOLDER_TIPO = "{tipo}";
+    private static final String PLACEHOLDER_PERGUNTA = "{pergunta}";
+    private static final String PLACEHOLDER_FRASE = "{frase}";
+    private static final String PLACEHOLDER_EMBARALHADA = "{embaralhada}";
+    private static final String PLACEHOLDER_RESPOSTA = "{resposta}";
     
     public QuizManager(@Nonnull ChatQuizPlugin plugin) {
         this.plugin = plugin;
@@ -61,13 +67,22 @@ public class QuizManager {
         cancelarTarefas();
         
         ChatQuizConfig config = plugin.getConfiguracao();
-        if (config.getPerguntas().isEmpty()) {
-            plugin.getLogger().atWarning().log("Nenhuma pergunta configurada!");
+        if (!temPerguntasDisponiveis(config)) {
+            plugin.getLogger().atWarning().log("Nenhuma pergunta/frase/palavra configurada!");
             return;
         }
         
         agendarProximoQuiz(config.getIntervaloInicioQuizSegundos());
         plugin.getLogger().atInfo().log("Ciclo iniciado. Proximo quiz em " + config.getIntervaloInicioQuizSegundos() + " segundos.");
+    }
+    
+    /**
+     * Verifica se existe algum jogo configurado
+     */
+    private boolean temPerguntasDisponiveis(ChatQuizConfig config) {
+        return !config.getQuizEntries().isEmpty() 
+            || !config.getTypeFrases().isEmpty() 
+            || !config.getScramblePalavras().isEmpty();
     }
     
     private void agendarProximoQuiz(int segundos) {
@@ -76,83 +91,151 @@ public class QuizManager {
     }
     
     /**
-     * Inicia um novo quiz
+     * Inicia um novo quiz aleatório (escolhe o tipo baseado no que está disponível)
      */
     public void iniciarQuiz() {
         ChatQuizConfig config = plugin.getConfiguracao();
-        List<ChatQuizConfig.PerguntaConfig> perguntas = config.getPerguntas();
         
-        if (perguntas.isEmpty()) {
-            plugin.getLogger().atWarning().log("Sem perguntas disponiveis.");
+        if (!temPerguntasDisponiveis(config)) {
+            plugin.getLogger().atWarning().log("Sem jogos disponiveis.");
             agendarProximoQuiz(config.getIntervaloInicioQuizSegundos());
             return;
         }
         
-        perguntaAtual = perguntas.get(random.nextInt(perguntas.size()));
-        quizAtivo = true;
-        palavraEmbaralhada = null;
-        
-        // Se for SCRAMBLE, embaralha a primeira resposta
-        String textoExibido = perguntaAtual.getPergunta();
-        if (perguntaAtual.getTipo() == QuizType.SCRAMBLE && !perguntaAtual.getRespostas().isEmpty()) {
-            palavraEmbaralhada = ChatQuizConfig.embaralharPalavra(perguntaAtual.getRespostas().get(0));
-            textoExibido = palavraEmbaralhada;
+        // Escolhe aleatoriamente um tipo que tenha entradas
+        QuizType tipo = escolherTipoAleatorio(config);
+        if (tipo == null) {
+            agendarProximoQuiz(config.getIntervaloInicioQuizSegundos());
+            return;
         }
         
-        // Envia mensagem de início com placeholders substituídos
-        enviarMensagemInicio(config, perguntaAtual, textoExibido);
+        tipoAtual = tipo;
+        quizAtivo = true;
+        limparDadosAtuais();
+        
+        // Carrega os dados específicos do tipo
+        switch (tipo) {
+            case QUIZ:
+                carregarQuiz(config);
+                break;
+            case TYPE:
+                carregarType(config);
+                break;
+            case SCRAMBLE:
+                carregarScramble(config);
+                break;
+        }
+        
+        // Envia mensagens de início
+        enviarMensagemInicio(config);
         
         if (config.getBannerIniciarQuiz().isAtivo()) {
             mostrarBannerParaTodos(
                 config.getBannerIniciarQuiz().getTitulo(),
-                substituirPlaceholders(config.getBannerIniciarQuiz().getSubtitulo(), "", textoExibido, perguntaAtual.getTipo())
+                config.getBannerIniciarQuiz().getSubtitulo()
             );
         }
         
-        plugin.getLogger().atInfo().log("Quiz iniciado! Tipo: " + perguntaAtual.getTipo() + " | " + perguntaAtual.getPergunta());
+        plugin.getLogger().atInfo().log("Quiz iniciado! Tipo: " + tipo);
         
         timeoutTask = scheduler.schedule(this::finalizarQuizSemVencedor, config.getDuracaoQuizSegundos(), TimeUnit.SECONDS);
     }
     
     /**
-     * Envia mensagem de início do quiz com formatação apropriada para cada tipo
+     * Escolhe um tipo aleatório que tenha entradas disponíveis
      */
-    private void enviarMensagemInicio(ChatQuizConfig config, ChatQuizConfig.PerguntaConfig pergunta, String textoExibido) {
-        QuizType tipo = pergunta.getTipo();
+    @Nullable
+    private QuizType escolherTipoAleatorio(ChatQuizConfig config) {
+        List<QuizType> tiposDisponiveis = new java.util.ArrayList<>();
         
-        for (String linha : config.getMensagemAntesQuizGlobal()) {
-            String mensagem = linha;
-            
-            // Substitui placeholders
-            mensagem = mensagem.replace(PLACEHOLDER_PERGUNTA, textoExibido);
-            mensagem = mensagem.replace(PLACEHOLDER_SCRAMBLE, palavraEmbaralhada != null ? palavraEmbaralhada : "");
-            mensagem = mensagem.replace(PLACEHOLDER_TIPO, tipo.name());
-            
-            // Ajusta mensagens conforme o tipo
-            if (tipo == QuizType.TYPE && mensagem.contains("Pergunta:")) {
-                mensagem = mensagem.replace("Pergunta:", "Digite:");
-            } else if (tipo == QuizType.SCRAMBLE && mensagem.contains("Pergunta:")) {
-                mensagem = mensagem.replace("Pergunta:", "Desembaralhe:");
-            }
-            
-            // Adiciona dica sobre o tipo no final da mensagem
-            if (mensagem.contains("Digite sua resposta") && tipo != QuizType.QUIZ) {
-                if (tipo == QuizType.TYPE) {
-                    mensagem = mensagem + " &7(rapido!)";
-                } else if (tipo == QuizType.SCRAMBLE) {
-                    mensagem = mensagem + " &7(desembaralhe!)";
-                }
-            }
-            
-            Universe.get().sendMessage(criarMensagem(mensagem));
+        if (!config.getQuizEntries().isEmpty()) tiposDisponiveis.add(QuizType.QUIZ);
+        if (!config.getTypeFrases().isEmpty()) tiposDisponiveis.add(QuizType.TYPE);
+        if (!config.getScramblePalavras().isEmpty()) tiposDisponiveis.add(QuizType.SCRAMBLE);
+        
+        if (tiposDisponiveis.isEmpty()) return null;
+        return tiposDisponiveis.get(random.nextInt(tiposDisponiveis.size()));
+    }
+    
+    private void limparDadosAtuais() {
+        quizEntryAtual = null;
+        fraseAtual = null;
+        embaralhadaAtual = null;
+    }
+    
+    private void carregarQuiz(ChatQuizConfig config) {
+        List<ChatQuizConfig.QuizEntry> entries = config.getQuizEntries();
+        if (!entries.isEmpty()) {
+            quizEntryAtual = entries.get(random.nextInt(entries.size()));
         }
+    }
+    
+    private void carregarType(ChatQuizConfig config) {
+        List<String> frases = config.getTypeFrases();
+        if (!frases.isEmpty()) {
+            fraseAtual = frases.get(random.nextInt(frases.size()));
+        }
+    }
+    
+    private void carregarScramble(ChatQuizConfig config) {
+        List<String> palavras = config.getScramblePalavras();
+        if (!palavras.isEmpty()) {
+            fraseAtual = palavras.get(random.nextInt(palavras.size()));
+            embaralhadaAtual = ChatQuizConfig.embaralharPalavra(fraseAtual);
+        }
+    }
+    
+    /**
+     * Envia mensagem de início do quiz
+     */
+    private void enviarMensagemInicio(ChatQuizConfig config) {
+        ChatQuizConfig.MensagensConfig msg = config.getMensagens();
+        
+        // Prefixo
+        Universe.get().sendMessage(criarMensagem(msg.getPrefixoQuiz()));
+        
+        // Linha principal conforme o tipo
+        String linhaPrincipal;
+        switch (tipoAtual) {
+            case QUIZ:
+                linhaPrincipal = msg.getQuizIniciou().replace(PLACEHOLDER_PERGUNTA, 
+                    quizEntryAtual != null ? quizEntryAtual.getPergunta() : "");
+                break;
+            case TYPE:
+                linhaPrincipal = msg.getTypeIniciou().replace(PLACEHOLDER_FRASE, 
+                    fraseAtual != null ? fraseAtual : "");
+                break;
+            case SCRAMBLE:
+                linhaPrincipal = msg.getScrambleIniciou().replace(PLACEHOLDER_EMBARALHADA, 
+                    embaralhadaAtual != null ? embaralhadaAtual : "");
+                break;
+            default:
+                linhaPrincipal = "";
+        }
+        Universe.get().sendMessage(criarMensagem(linhaPrincipal));
+        
+        // Dica
+        String dica;
+        switch (tipoAtual) {
+            case QUIZ:
+                dica = msg.getDicaQuiz();
+                break;
+            case TYPE:
+                dica = msg.getDicaType();
+                break;
+            case SCRAMBLE:
+                dica = msg.getDicaScramble();
+                break;
+            default:
+                dica = "";
+        }
+        Universe.get().sendMessage(criarMensagem(dica));
     }
     
     /**
      * Processa resposta do chat
      */
     public void processarResposta(@Nonnull PlayerChatEvent event) {
-        if (!quizAtivo || perguntaAtual == null) {
+        if (!quizAtivo || tipoAtual == null) {
             return;
         }
         
@@ -164,53 +247,34 @@ public class QuizManager {
         }
         
         String nomeJogador = sender.getUsername();
-        QuizType tipo = perguntaAtual.getTipo();
-        
         boolean acertou = false;
         
-        switch (tipo) {
+        switch (tipoAtual) {
+            case QUIZ:
+                acertou = validarQuiz(mensagem);
+                break;
             case TYPE:
-                // TYPE: comparação exata, sem normalização (apenas trim)
-                acertou = validarTipo(mensagem, perguntaAtual.getRespostas());
+                acertou = validarType(mensagem);
                 break;
             case SCRAMBLE:
-                // SCRAMBLE: validação normalizada
-                acertou = validarScramble(mensagem, perguntaAtual.getRespostas());
-                break;
-            case QUIZ:
-            default:
-                // QUIZ: validação normalizada (case insensitive, sem acentos)
-                acertou = validarQuiz(mensagem, perguntaAtual.getRespostas());
+                acertou = validarScramble(mensagem);
                 break;
         }
         
         if (acertou) {
             processarVitoria(sender, nomeJogador);
         } else {
-            // Resposta errada - mensagem conforme o tipo
-            enviarMensagemErro(sender, tipo);
+            enviarMensagemErro(sender);
         }
     }
     
     /**
-     * Valida resposta para tipo TYPE (digitação exata, case insensitive mas preserva espaços/pontuação)
+     * Valida resposta para tipo QUIZ
      */
-    private boolean validarTipo(String mensagem, List<String> respostas) {
-        String respostaDigitada = mensagem.trim();
-        for (String respostaCorreta : respostas) {
-            if (respostaDigitada.equalsIgnoreCase(respostaCorreta.trim())) {
-                return true;
-            }
-        }
-        return false;
-    }
-    
-    /**
-     * Valida resposta para tipo SCRAMBLE (normalizado)
-     */
-    private boolean validarScramble(String mensagem, List<String> respostas) {
+    private boolean validarQuiz(String mensagem) {
+        if (quizEntryAtual == null) return false;
         String respostaNormalizada = normalizarTexto(mensagem);
-        for (String respostaCorreta : respostas) {
+        for (String respostaCorreta : quizEntryAtual.getRespostas()) {
             if (respostaNormalizada.equals(normalizarTexto(respostaCorreta))) {
                 return true;
             }
@@ -219,35 +283,40 @@ public class QuizManager {
     }
     
     /**
-     * Valida resposta para tipo QUIZ (normalizado, suporta múltiplas variações)
+     * Valida resposta para tipo TYPE (digitação exata, case insensitive)
      */
-    private boolean validarQuiz(String mensagem, List<String> respostas) {
-        String respostaNormalizada = normalizarTexto(mensagem);
-        for (String respostaCorreta : respostas) {
-            if (respostaNormalizada.equals(normalizarTexto(respostaCorreta))) {
-                return true;
-            }
-        }
-        return false;
+    private boolean validarType(String mensagem) {
+        if (fraseAtual == null) return false;
+        return mensagem.trim().equalsIgnoreCase(fraseAtual.trim());
+    }
+    
+    /**
+     * Valida resposta para tipo SCRAMBLE
+     */
+    private boolean validarScramble(String mensagem) {
+        if (fraseAtual == null) return false;
+        return normalizarTexto(mensagem).equals(normalizarTexto(fraseAtual));
     }
     
     /**
      * Envia mensagem de erro conforme o tipo do quiz
      */
-    private void enviarMensagemErro(com.hypixel.hytale.server.core.universe.PlayerRef player, QuizType tipo) {
+    private void enviarMensagemErro(com.hypixel.hytale.server.core.universe.PlayerRef player) {
         scheduler.schedule(() -> {
+            ChatQuizConfig.MensagensConfig msg = plugin.getConfiguracao().getMensagens();
             String mensagem;
-            switch (tipo) {
+            switch (tipoAtual) {
+                case QUIZ:
+                    mensagem = msg.getErroQuiz();
+                    break;
                 case TYPE:
-                    mensagem = "&cErrado! &fDigite exatamente como mostrado.";
+                    mensagem = msg.getErroType();
                     break;
                 case SCRAMBLE:
-                    mensagem = "&cErrado! &fTente reorganizar as letras.";
+                    mensagem = msg.getErroScramble();
                     break;
-                case QUIZ:
                 default:
-                    mensagem = "&cResposta errada! &fTente novamente.";
-                    break;
+                    mensagem = "&cErrado!";
             }
             player.sendMessage(criarMensagem(mensagem));
         }, 100, TimeUnit.MILLISECONDS);
@@ -258,63 +327,82 @@ public class QuizManager {
         cancelarTarefas();
         
         ChatQuizConfig config = plugin.getConfiguracao();
+        ChatQuizConfig.MensagensConfig msg = config.getMensagens();
         
-        // Envia mensagem global para todos (incluindo o ganhador) com delay
+        // Envia mensagem de vitória
+        String mensagemVitoria = msg.getAcertou().replace(PLACEHOLDER_PLAYER, nomeJogador);
         scheduler.schedule(() -> {
-            enviarMensagemGlobalComPlayer(config.getMensagemGlobalAoAcertar(), nomeJogador, "");
+            Universe.get().sendMessage(criarMensagem(msg.getPrefixoQuiz()));
+            Universe.get().sendMessage(criarMensagem(mensagemVitoria));
         }, 200, TimeUnit.MILLISECONDS);
         
         if (config.getBannerGanhadorQuiz().isAtivo()) {
             mostrarBannerParaTodos(
                 config.getBannerGanhadorQuiz().getTitulo(),
-                substituirPlaceholders(config.getBannerGanhadorQuiz().getSubtitulo(), nomeJogador, "", perguntaAtual.getTipo())
+                config.getBannerGanhadorQuiz().getSubtitulo().replace(PLACEHOLDER_PLAYER, nomeJogador)
             );
         }
         
-        executarComandos(config.getComandosGlobaisAoAcertar(), nomeJogador);
-        
-        if (perguntaAtual != null) {
-            executarComandos(perguntaAtual.getComandosAoAcertar(), nomeJogador);
+        // Executa comandos
+        for (String comando : config.getComandosAoAcertar()) {
+            String comandoFinal = comando.replace(PLACEHOLDER_PLAYER, nomeJogador);
+            try {
+                com.hypixel.hytale.server.core.command.system.CommandManager.get()
+                    .handleCommand(com.hypixel.hytale.server.core.console.ConsoleSender.INSTANCE, comandoFinal);
+            } catch (Exception e) {
+                plugin.getLogger().atWarning().log("Erro ao executar comando: " + comandoFinal);
+            }
         }
         
-        plugin.getLogger().atInfo().log("Quiz finalizado! Vencedor: " + nomeJogador);
+        plugin.getLogger().atInfo().log("Quiz finalizado! Tipo: " + tipoAtual + " | Vencedor: " + nomeJogador);
         
-        perguntaAtual = null;
-        palavraEmbaralhada = null;
+        limparEstado();
         agendarProximoQuiz(config.getIntervaloInicioQuizSegundos());
     }
     
     private void finalizarQuizSemVencedor() {
-        if (!quizAtivo) {
-            return;
-        }
+        if (!quizAtivo) return;
         
         quizAtivo = false;
         
-        // Mostra a resposta correta dependendo do tipo
-        String mensagemTimeout = "&6&lQUIZ &cNinguem acertou a pergunta!";
-        if (perguntaAtual != null) {
-            QuizType tipo = perguntaAtual.getTipo();
-            if (tipo == QuizType.SCRAMBLE && !perguntaAtual.getRespostas().isEmpty()) {
-                mensagemTimeout = "&6&lQUIZ &cNinguem acertou! &fA palavra era: &e" + perguntaAtual.getRespostas().get(0);
-            } else if (tipo == QuizType.TYPE && !perguntaAtual.getRespostas().isEmpty()) {
-                mensagemTimeout = "&6&lQUIZ &cNinguem digitou a frase corretamente!";
-            }
+        ChatQuizConfig.MensagensConfig msg = plugin.getConfiguracao().getMensagens();
+        
+        // Mensagem de timeout
+        String resposta = "";
+        switch (tipoAtual) {
+            case QUIZ:
+                if (quizEntryAtual != null && !quizEntryAtual.getRespostas().isEmpty()) {
+                    resposta = quizEntryAtual.getRespostas().get(0);
+                }
+                break;
+            case TYPE:
+            case SCRAMBLE:
+                resposta = fraseAtual != null ? fraseAtual : "";
+                break;
         }
         
-        Universe.get().sendMessage(criarMensagem(mensagemTimeout));
+        Universe.get().sendMessage(criarMensagem(msg.getPrefixoQuiz()));
+        Universe.get().sendMessage(criarMensagem(msg.getNinguemAcertou()));
+        if (!resposta.isEmpty()) {
+            Universe.get().sendMessage(criarMensagem(msg.getRespostaEra().replace(PLACEHOLDER_RESPOSTA, resposta)));
+        }
         
-        plugin.getLogger().atInfo().log("Quiz finalizado sem vencedor.");
+        plugin.getLogger().atInfo().log("Quiz finalizado sem vencedor. Tipo: " + tipoAtual);
         
-        perguntaAtual = null;
-        palavraEmbaralhada = null;
+        limparEstado();
         agendarProximoQuiz(plugin.getConfiguracao().getIntervaloInicioQuizSegundos());
+    }
+    
+    private void limparEstado() {
+        tipoAtual = null;
+        quizEntryAtual = null;
+        fraseAtual = null;
+        embaralhadaAtual = null;
     }
     
     public void cancelarQuizAtual() {
         quizAtivo = false;
-        perguntaAtual = null;
-        palavraEmbaralhada = null;
+        limparEstado();
         cancelarTarefas();
     }
     
@@ -329,25 +417,6 @@ public class QuizManager {
         }
     }
     
-    private void enviarMensagemGlobal(@Nonnull List<String> mensagens, @Nonnull String pergunta) {
-        enviarMensagemGlobalComPlayer(mensagens, "", pergunta);
-    }
-    
-    private void enviarMensagemGlobalComPlayer(@Nonnull List<String> mensagens, @Nonnull String player, @Nonnull String pergunta) {
-        enviarMensagemGlobalComPlayer(mensagens, player, pergunta, QuizType.QUIZ);
-    }
-    
-    private void enviarMensagemGlobalComPlayer(@Nonnull List<String> mensagens, @Nonnull String player, @Nonnull String pergunta, QuizType tipo) {
-        try {
-            for (String linha : mensagens) {
-                String mensagem = substituirPlaceholders(linha, player, pergunta, tipo);
-                Universe.get().sendMessage(criarMensagem(mensagem));
-            }
-        } catch (Exception e) {
-            plugin.getLogger().atWarning().log("Erro ao enviar mensagem: " + e.getMessage());
-        }
-    }
-    
     private void mostrarBannerParaTodos(@Nonnull String titulo, @Nonnull String subtitulo) {
         try {
             Message titleMsg = criarMensagem(titulo);
@@ -359,26 +428,6 @@ public class QuizManager {
         } catch (Exception e) {
             plugin.getLogger().atWarning().log("Erro ao mostrar banner: " + e.getMessage());
         }
-    }
-    
-    private void executarComandos(@Nonnull List<String> comandos, @Nonnull String nomeJogador) {
-        for (String comando : comandos) {
-            String comandoFinal = substituirPlaceholders(comando, nomeJogador, "", QuizType.QUIZ);
-            
-            try {
-                com.hypixel.hytale.server.core.command.system.CommandManager.get()
-                    .handleCommand(com.hypixel.hytale.server.core.console.ConsoleSender.INSTANCE, comandoFinal);
-            } catch (Exception e) {
-                plugin.getLogger().atWarning().log("Erro ao executar comando: " + comandoFinal);
-            }
-        }
-    }
-    
-    @Nonnull
-    private String substituirPlaceholders(@Nonnull String texto, @Nonnull String player, @Nonnull String pergunta, QuizType tipo) {
-        return texto.replace(PLACEHOLDER_PLAYER, player)
-                    .replace(PLACEHOLDER_PERGUNTA, pergunta)
-                    .replace(PLACEHOLDER_TIPO, tipo.name());
     }
     
     @Nonnull
@@ -402,12 +451,22 @@ public class QuizManager {
     }
     
     @Nullable
-    public ChatQuizConfig.PerguntaConfig getPerguntaAtual() {
-        return perguntaAtual;
+    public QuizType getTipoAtual() {
+        return tipoAtual;
     }
     
     @Nullable
-    public String getPalavraEmbaralhada() {
-        return palavraEmbaralhada;
+    public String getFraseAtual() {
+        return fraseAtual;
+    }
+    
+    @Nullable
+    public String getEmbaralhadaAtual() {
+        return embaralhadaAtual;
+    }
+    
+    @Nullable
+    public ChatQuizConfig.QuizEntry getQuizEntryAtual() {
+        return quizEntryAtual;
     }
 }
